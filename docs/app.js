@@ -37,13 +37,13 @@ function occs(){
     const dur=e.end-e.start,r=e.rep,add=t=>{
       if(t<lo||t>hi||(e.skip||[]).includes(t))return;
       const p=parts(t,tz),col=(Date.UTC(p.year,p.month-1,p.day)-wk)/DAY;
-      if(col>=0&&col<7)out.push({e,t,dur,col,min:p.hour*60+p.minute});
+      if(col>=0&&col<7)out.push({e,t,dur,col,min:p.hour*60+p.minute,done:r?(e.doneOn||[]).includes(t):e.done});
     };
     if(!r){add(e.start);return}
-    const until=r.until?Date.parse(r.until)+DAY:Infinity;
+    const until=r.until?Date.parse(r.until)+DAY:Infinity,cut=r.endBefore??Infinity;
     let n=0;const per=r.type==='daily'?DAY:7*DAY;
     if(r.type!=='monthly')n=Math.max(0,Math.floor((lo-e.start)/per)-1);
-    for(let k=0;k<3000;k++,n++){const t=step(e.start,r.type,n);if(t>hi||t>=until)break;add(t)}
+    for(let k=0;k<3000;k++,n++){const t=step(e.start,r.type,n);if(t>hi||t>=until||t>=cut)break;add(t)}
   });
   return out;
 }
@@ -78,7 +78,7 @@ function render(){
     lay(items);
     const evs=items.map(o=>{
       const c=cat(o.e.cat),top=Math.max(0,(o.min-h0*60)/60*hh),bot=Math.min((h1-h0)*hh,(o.min+o.dur/MIN-h0*60)/60*hh),h=Math.max(bot-top,16);
-      return `<div class="ev${o.e.done?' done':''}" data-id="${o.e.id}" data-t="${o.t}" title="${esc(o.e.title)}" style="top:${top}px;height:${h}px;left:calc(${o.lane/o.n*100}% + 2px);width:calc(${100/o.n}% - 4px);--c:${c.color}"><input type="checkbox" class="chk"${o.e.done?' checked':''}><b>${esc(o.e.title)}</b><small>${fmt(o.t)}–${fmt(o.t+o.dur)}${o.e.rep?' ↻':''}${o.e.loc?' · '+esc(o.e.loc):''}${o.e.tz!==tz?' · '+esc(o.e.tz.split('/').pop()):''}</small><i class="rz"></i></div>`;
+      return `<div class="ev${o.done?' done':''}" data-id="${o.e.id}" data-t="${o.t}" title="${esc(o.e.title)}" style="top:${top}px;height:${h}px;left:calc(${o.lane/o.n*100}% + 2px);width:calc(${100/o.n}% - 4px);--c:${c.color}"><input type="checkbox" class="chk"${o.done?' checked':''}><b>${esc(o.e.title)}</b><small>${fmt(o.t)}–${fmt(o.t+o.dur)}${o.e.rep?' ↻':''}${o.e.loc?' · '+esc(o.e.loc):''}${o.e.tz!==tz?' · '+esc(o.e.tz.split('/').pop()):''}</small><i class="rz"></i></div>`;
     }).join('');
     const nm=np.hour*60+np.minute,now=dt===today&&nm>=h0*60&&nm<h1*60?`<div class="now" style="top:${(nm-h0*60)/60*hh}px"></div>`:'';
     return `<div class="col${dt===today?' td':''}" data-i="${i}" style="height:${(h1-h0)*hh}px">${evs}${now}</div>`;
@@ -88,7 +88,7 @@ function render(){
   // to-schedule
   const todos=S.todo.filter(vis);
   $('#aside').innerHTML=`<h2>To schedule · ${fmtD(wk,{month:'short',day:'numeric'})} – ${fmtD(wk+6*DAY,{month:'short',day:'numeric'})}</h2><p>Drag a note by its handle onto the grid. Drag an event here to unschedule it. Click a note to edit, or change its week.</p><button id="tadd" class="pri">+ Add task</button>${(n=>n?`<p>${n} more task${n>1?'s':''} planned for later weeks.</p>`:'')(S.todo.filter(t=>t.week>wk&&!t.done).length)}`+
-  (todos.length?todos.map(t=>`<div class="note${t.done?' done':''}" data-id="${t.id}" style="--c:${cat(t.cat).color}"><span class="grip" draggable="true" title="Drag to the grid">⠿</span><input type="checkbox" class="dn"${t.done?' checked':''} aria-label="Done"><div class="nb"><b>${esc(t.title)}</b><small>${t.loc?esc(t.loc)+' · ':''}${durL(t.dur)} · ${esc(cat(t.cat).name)}${t.week<wk?' · Carried over':''}</small></div><button class="x" aria-label="Delete">×</button></div>`).join(''):'<p>Nothing waiting. Add ideas here before you pick a time.</p>');
+      (todos.length?todos.map(t=>`<div class="note${t.done?' done':''}" data-id="${t.id}" style="--c:${cat(t.cat).color}"><span class="grip" draggable="true" title="Drag to the grid">⠿</span><input type="checkbox" class="dn"${t.done?' checked':''} aria-label="Done"><div class="nb"><b>${esc(t.title)}</b><small>${t.loc?esc(t.loc)+' · ':''}${durL(t.dur)} · ${esc(cat(t.cat).name)}${t.week<wk?' · Carried over':''}</small></div><button class="x" aria-label="Delete">×</button></div>`).join(''):'<p>Nothing waiting. Add ideas here before you pick a time.</p>');
 }
 
 /* ============ Grid interactions ============ */
@@ -116,17 +116,18 @@ cal.addEventListener('pointerdown',e=>{
     const dx=m.clientX-sx,dy=m.clientY-sy;
     if(mode==='cr'){sel.remove();if(!moved)b=a+60;a=Math.max(base,Math.min(a,h1*60-sn));b=Math.min(b,h1*60);openEd({start:toMs(wk+ci*DAY+a*MIN,TZ()),end:toMs(wk+ci*DAY+b*MIN,TZ())});return}
     if(!moved){openEd(o);return}
-    if(mode==='rz'){const d=Math.max(sn,q(o.dur/MIN+dy/hh*60));mut(()=>o.e.end=o.e.start+d*MIN);return}
+    if(mode==='rz'){const d=Math.max(sn,q(o.dur/MIN+dy/hh*60));moveOcc(o,o.t,o.t+d*MIN);return}
     if(overAside){mut(()=>{S.todo.push({id:uid(),title:o.e.title,cat:o.e.cat,loc:o.e.loc||'',dur:Math.round(o.dur/MIN),week:wk});if(o.e.rep)(o.e.skip=o.e.skip||[]).push(o.t);else S.events=S.events.filter(x=>x!==o.e)});return}
     const nc=Math.max(0,Math.min(6,ci+Math.round(dx/cw))),nm=Math.max(base,Math.min(h1*60-sn,q(o.min+dy/hh*60))),ns=toMs(wk+nc*DAY+nm*MIN,TZ()),d=ns-o.t;
-    mut(()=>{o.e.start+=d;o.e.end+=d});
+    moveOcc(o,ns,ns+o.dur);
   };
   const cancel=()=>{window.removeEventListener('pointermove',mv);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',cancel);render()};
   window.addEventListener('pointermove',mv);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',cancel);
 });
 cal.addEventListener('change',e=>{
   if(!e.target.classList.contains('chk'))return;
-  const ev=e.target.closest('.ev'),x=S.events.find(v=>v.id===ev.dataset.id);mut(()=>x.done=e.target.checked);
+  const ev=e.target.closest('.ev'),x=S.events.find(v=>v.id===ev.dataset.id),t=+ev.dataset.t,on=e.target.checked;
+  mut(()=>{if(!x.rep){x.done=on;return}const a=(x.doneOn||[]).filter(k=>k!==t);if(on)a.push(t);x.doneOn=a});
 });
 // drop from "to schedule"
 cal.addEventListener('dragover',e=>{if(DR&&e.target.closest('.col'))e.preventDefault()});
@@ -178,20 +179,52 @@ function openEd(o){
   f.title.value=e.title;f.cat.value=e.cat;f.date.value=isoD(s);f.st.value=pad(parts(s,TZ()).hour)+':'+pad(parts(s,TZ()).minute);
   const pe=parts(en,TZ());f.en.value=pad(pe.hour)+':'+pad(pe.minute);
   f.rep.value=e.rep?e.rep.type:'';f.until.value=e.rep?.until||'';f.loc.value=e.loc||'';f.notes.value=e.notes||'';
-  $('#delA').hidden=!o.e;$('#del1').hidden=!(o.e&&o.e.rep);$('#delA').textContent=o.e&&o.e.rep?'Delete all':'Delete';
+  $('#delA').hidden=!o.e;$('#del1').hidden=!(o.e&&o.e.rep);$('#delA').textContent=o.e&&o.e.rep?'Delete this & future':'Delete';
   ed.showModal();f.title.focus();
 }
-f.addEventListener('submit',()=>{
+// Apply changes to one occurrence and every later one; earlier occurrences stay untouched.
+function applyFuture(e,t,ch){
+  ch={...ch};const d=ch.start-t,cut=e.rep&&e.rep.endBefore;
+  if(ch.rep&&cut!=null)ch.rep={...ch.rep,endBefore:cut};
+  if(t<=e.start){Object.assign(e,ch);e.doneOn=(e.doneOn||[]).map(k=>k+d);e.skip=(e.skip||[]).map(k=>k+d);return}
+  S.events.push({id:uid(),title:e.title,cat:e.cat,loc:e.loc,notes:e.notes,tz:e.tz,done:false,rep:e.rep,...ch,
+    doneOn:(e.doneOn||[]).filter(k=>k>=t).map(k=>k+d),skip:(e.skip||[]).filter(k=>k>=t).map(k=>k+d)});
+  e.rep={...e.rep,endBefore:t};e.doneOn=(e.doneOn||[]).filter(k=>k<t);e.skip=(e.skip||[]).filter(k=>k<t);
+}
+const scope=()=>new Promise(r=>{const d=$('#sc');d.returnValue='no';d.onclose=()=>r(d.returnValue);d.showModal()});
+// Detach one occurrence of a repeating event into its own standalone event
+function splitOne(e,t,ch){
+  const was=(e.doneOn||[]).includes(t);
+  (e.skip=e.skip||[]).push(t);e.doneOn=(e.doneOn||[]).filter(k=>k!==t);
+  S.events.push({id:uid(),title:e.title,cat:e.cat,loc:e.loc,notes:e.notes,tz:e.tz,done:was,skip:[],...ch,rep:null});
+}
+// Move/resize one occurrence; repeating events ask "only this" or "all"
+async function moveOcc(o,ns,ne){
+  let sc='all';
+  if(o.e.rep){sc=await scope();if(sc==='no'){render();return}}
+  mut(()=>{
+    if(sc==='one')splitOne(o.e,o.t,{start:ns,end:ne});
+    else applyFuture(o.e,o.t,{start:ns,end:ne});
+  });
+}
+f.addEventListener('submit',async e=>{
+  e.preventDefault();
   const tz=TZ(),d=f.date.value,s=toMs(Date.parse(d+'T'+f.st.value+':00Z'),tz);let en=toMs(Date.parse(d+'T'+f.en.value+':00Z'),tz);
   if(en<=s)en=s+S.set.snap*MIN;
   const rep=f.rep.value?{type:f.rep.value,until:f.until.value||null}:null,v={title:f.title.value.trim()||'Untitled',cat:f.cat.value,loc:f.loc.value,notes:f.notes.value,rep};
+  let sc='all';
+  if(ED.e&&ED.e.rep){sc=await scope();if(sc==='no')return}
   mut(()=>{
-    if(ED.e){const delta=s-ED.t;Object.assign(ED.e,v);ED.e.start+=delta;ED.e.end=ED.e.start+(en-s)}
-    else S.events.push({id:uid(),...v,start:s,end:en,tz,done:false,skip:[]});
+    if(!ED.e)S.events.push({id:uid(),...v,start:s,end:en,tz,done:false,skip:[]});
+    else if(sc==='one')splitOne(ED.e,ED.t,{title:v.title,cat:v.cat,loc:v.loc,notes:v.notes,start:s,end:en});
+    else applyFuture(ED.e,ED.t,{...v,start:s,end:en});
   });
+  ed.close();
 });
 $('#cancel').onclick=()=>ed.close();
-$('#delA').onclick=()=>{mut(()=>S.events=S.events.filter(x=>x!==ED.e));ed.close()};
+$('#delA').onclick=()=>{mut(()=>{const e=ED.e,t=ED.t;
+  if(e.rep&&t>e.start){e.rep={...e.rep,endBefore:t};e.doneOn=(e.doneOn||[]).filter(k=>k<t);e.skip=(e.skip||[]).filter(k=>k<t)}
+  else S.events=S.events.filter(x=>x!==e)});ed.close()};
 $('#del1').onclick=()=>{mut(()=>(ED.e.skip=ED.e.skip||[]).push(ED.t));ed.close()};
 
 /* ============ Weekly review & copy week ============ */
